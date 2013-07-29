@@ -45,7 +45,7 @@ type Settings struct {
 
 var conf *Settings
 var templates *template.Template
-
+var rc *redis.Client
 
 func main() {
 	cf := flag.String("config", "freegeoip.conf", "set config file")
@@ -58,6 +58,8 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	rc = redis.New(conf.Redis...)
+
 	templates = template.Must(template.ParseGlob(fmt.Sprintf("%s/template/*.html", conf.DocumentRoot)))
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
 	h := GeoipHandler()
@@ -65,6 +67,7 @@ func main() {
 	http.HandleFunc("/xml/", h)
 	http.HandleFunc("/json/", h)
 	http.HandleFunc("/map/", h)
+	http.HandleFunc("/track/", TrackerHandler)
 	server := http.Server{
 		Addr: conf.Addr,
 		Handler: httpxtra.Handler{
@@ -106,7 +109,6 @@ func GeoipHandler() http.HandlerFunc {
 		log.Fatal(err)
 	}
 	//defer stmt.Close()
-	rc := redis.New(conf.Redis...)
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
@@ -226,6 +228,26 @@ func HasQuota(rc *redis.Client, ipkey *string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func TrackerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, http.StatusText(405), 405)
+		return
+	}
+
+	lat := r.FormValue("lat")
+	long := r.FormValue("long")
+	ip := strings.Split(r.RemoteAddr, ":")[0]
+	dt := strconv.FormatInt(time.Now().Unix(), 10)
+	if lat == "" || long == "" {
+		http.Error(w, http.StatusText(400), 400)
+		return
+	}
+	go func() {
+		fmt.Println(fmt.Sprintf("freegeoip:tracker:%s", ip), dt, fmt.Sprintf("%s:%s", lat, long))
+		rc.ZAdd(fmt.Sprintf("freegeoip:tracker:%s", ip), dt, fmt.Sprintf("%s:%s", lat, long))
+	}()
 }
 
 const query = `SELECT
