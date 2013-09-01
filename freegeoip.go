@@ -23,6 +23,7 @@ import (
 	"github.com/fiorix/go-redis/redis"
 	"github.com/fiorix/go-web/httpxtra"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pmylund/go-cache"
 )
 
 type Settings struct {
@@ -43,6 +44,7 @@ type Settings struct {
 }
 
 var conf *Settings
+var geoip_cache *cache.Cache
 
 func main() {
 	cf := flag.String("config", "freegeoip.conf", "set config file")
@@ -55,6 +57,8 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	// how long in cache, how often we clean. observe Go's GC to tune it.
+	geoip_cache = cache.New(10*time.Minute, 120*time.Second)
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
 	h := GeoipHandler()
 	http.HandleFunc("/csv/", h)
@@ -240,7 +244,14 @@ WHERE city_blocks.ip_start <= ?
 ORDER BY city_blocks.ip_start DESC LIMIT 1`
 
 func GeoipLookup(stmt *sql.Stmt, ip string) (*GeoIP, error) {
+	val, found := geoip_cache.Get(ip)
+	if found {
+		v := val.(GeoIP)
+		return &v, nil
+	}
+
 	IP := net.ParseIP(ip)
+
 	var reserved bool
 	for _, net := range reservedIPs {
 		if net.Contains(IP) {
@@ -271,6 +282,7 @@ func GeoipLookup(stmt *sql.Stmt, ip string) (*GeoIP, error) {
 			return nil, err
 		}
 	}
+	geoip_cache.Set(ip, geoip, 0)
 	return &geoip, nil
 }
 
