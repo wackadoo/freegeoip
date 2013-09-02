@@ -45,6 +45,7 @@ type Settings struct {
 
 var conf *Settings
 var geoip_cache *cache.Cache
+var quota_cache *cache.Cache
 
 func main() {
 	cf := flag.String("config", "freegeoip.conf", "set config file")
@@ -59,6 +60,9 @@ func main() {
 	}
 	// how long in cache, how often we clean. observe Go's GC to tune it.
 	geoip_cache = cache.New(10*time.Minute, 120*time.Second)
+	quota_cache = cache.New(5*time.Minute, 300*time.Second)
+	go CacheMonitor()
+
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
 	h := GeoipHandler()
 	http.HandleFunc("/csv/", h)
@@ -132,7 +136,7 @@ func GeoipHandler() http.HandlerFunc {
 			ipkey = ip
 		}
 		// Check quota
-		if ok, err = HasQuota(rc, &ipkey); err != nil {
+		if ok, err = HasQuotaLocal(rc, &ipkey); err != nil {
 			// Redis down?
 			if conf.Debug {
 				log.Println("Redis error:", err.Error())
@@ -219,6 +223,28 @@ func HasQuota(rc *redis.Client, ipkey *string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func HasQuotaLocal(rc *redis.Client, ipkey *string) (bool, error) {
+	val, found := quota_cache.Get(*ipkey)
+	if found {
+		i := val.(int)
+		if i < conf.Limit.MaxRequests {
+			quota_cache.Increment(*ipkey, 1)
+		} else {
+			return false, nil
+		}
+	} else {
+		quota_cache.Set(*ipkey, 0, time.Duration(conf.Limit.Expire)*time.Second)
+	}
+
+	return true, nil
+}
+
+func CacheMonitor() {
+	log.Println("Quota cache size: ", quota_cache.ItemCount())
+	log.Println("GeoIP cache size: ", geoip_cache.ItemCount())
+	time.Sleep(60 * time.Second)
 }
 
 const query = `SELECT
