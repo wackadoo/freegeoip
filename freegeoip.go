@@ -28,6 +28,7 @@ type Settings struct {
 	XMLName      xml.Name `xml:"Server"`
 	Debug        bool     `xml:"debug,attr"`
 	XHeaders     bool     `xml:"xheaders,attr"`
+	Log          bool     `xml:"log,attr"`
 	Addr         string   `xml:"addr,attr"`
 	DocumentRoot string
 	IPDB         struct {
@@ -67,12 +68,13 @@ func main() {
 	http.HandleFunc("/csv/", h)
 	http.HandleFunc("/xml/", h)
 	http.HandleFunc("/json/", h)
+	handler := httpxtra.Handler{XHeaders: conf.XHeaders}
+	if conf.Log {
+		handler.Logger = logger
+	}
 	server := http.Server{
-		Addr: conf.Addr,
-		Handler: httpxtra.Handler{
-			Logger:   logger,
-			XHeaders: conf.XHeaders,
-		},
+		Addr:         conf.Addr,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
