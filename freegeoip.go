@@ -16,11 +16,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/fiorix/go-redis/redis"
 	"github.com/fiorix/go-web/httpxtra"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pmylund/go-cache"
@@ -40,7 +38,6 @@ type Settings struct {
 		MaxRequests int `xml:",attr"`
 		Expire      int `xml:",attr"`
 	}
-	Redis []string `xml:"Redis>Addr"`
 }
 
 var conf *Settings
@@ -58,11 +55,13 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	// how long in cache, how often we clean. observe Go's GC to tune it.
+	// How long in cache, how often we clean. observe Go's GC to tune it.
 	geoip_cache = cache.New(10*time.Minute, 120*time.Second)
-	quota_cache = cache.New(5*time.Minute, 300*time.Second)
-	go CacheMonitor()
-
+	quota_cache = cache.New(
+		time.Duration(conf.Limit.Expire)*time.Second, 10*time.Second)
+	if conf.Debug {
+		go CacheMonitor()
+	}
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
 	h := GeoipHandler()
 	http.HandleFunc("/csv/", h)
@@ -80,6 +79,14 @@ func main() {
 	log.Printf("FreeGeoIP server starting on %s (xheaders=%t)",
 		conf.Addr, conf.XHeaders)
 	log.Fatal(httpxtra.ListenAndServe(server))
+}
+
+func CacheMonitor() {
+	for {
+		time.Sleep(60 * time.Second)
+		log.Println("Quota cache size:", quota_cache.ItemCount())
+		log.Println("GeoIP cache size:", geoip_cache.ItemCount())
+	}
 }
 
 func logger(r *http.Request, created time.Time, status, bytes int) {
@@ -107,7 +114,6 @@ func GeoipHandler() http.HandlerFunc {
 		log.Fatal(err)
 	}
 	//defer stmt.Close()
-	rc := redis.New(conf.Redis...)
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
@@ -128,7 +134,6 @@ func GeoipHandler() http.HandlerFunc {
 		var (
 			ip, ipkey string
 			err       error
-			ok        bool
 		)
 		if ip, _, err = net.SplitHostPort(r.RemoteAddr); err != nil {
 			ipkey = r.RemoteAddr // Support for XHeaders
@@ -136,14 +141,7 @@ func GeoipHandler() http.HandlerFunc {
 			ipkey = ip
 		}
 		// Check quota
-		if ok, err = HasQuotaLocal(rc, &ipkey); err != nil {
-			// Redis down?
-			if conf.Debug {
-				log.Println("Redis error:", err.Error())
-			}
-			http.Error(w, http.StatusText(503), 503)
-			return
-		} else if !ok {
+		if !HasQuota(&ipkey) {
 			// Over quota, soz :(
 			http.Error(w, http.StatusText(403), 403)
 			return
@@ -209,42 +207,17 @@ func GeoipHandler() http.HandlerFunc {
 	}
 }
 
-func HasQuota(rc *redis.Client, ipkey *string) (bool, error) {
-	if ns, err := rc.Get(*ipkey); err != nil {
-		return false, err
-	} else if ns == "" {
-		if err := rc.Set(*ipkey, "1"); err != nil {
-			return false, err
-		}
-		rc.Expire(*ipkey, conf.Limit.Expire)
-	} else if n, _ := strconv.Atoi(ns); n < conf.Limit.MaxRequests {
-		rc.Incr(*ipkey)
-	} else {
-		return false, nil
-	}
-	return true, nil
-}
-
-func HasQuotaLocal(rc *redis.Client, ipkey *string) (bool, error) {
-	val, found := quota_cache.Get(*ipkey)
-	if found {
-		i := val.(int)
-		if i < conf.Limit.MaxRequests {
+func HasQuota(ipkey *string) bool {
+	if n, ok := quota_cache.Get(*ipkey); ok {
+		if n.(int) < conf.Limit.MaxRequests {
 			quota_cache.Increment(*ipkey, 1)
 		} else {
-			return false, nil
+			return false
 		}
 	} else {
-		quota_cache.Set(*ipkey, 0, time.Duration(conf.Limit.Expire)*time.Second)
+		quota_cache.Set(*ipkey, 1, 0)
 	}
-
-	return true, nil
-}
-
-func CacheMonitor() {
-	log.Println("Quota cache size: ", quota_cache.ItemCount())
-	log.Println("GeoIP cache size: ", geoip_cache.ItemCount())
-	time.Sleep(60 * time.Second)
+	return true
 }
 
 const query = `SELECT
