@@ -78,8 +78,10 @@ func main() {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
-	log.Printf("FreeGeoIP server starting on %s (xheaders=%t)",
-		conf.Addr, conf.XHeaders)
+	log.Printf(
+		"FreeGeoIP server starting on %s "+
+			"(xheaders=%t,debug=%t,log=%t)",
+		conf.Addr, conf.XHeaders, conf.Debug, conf.Log)
 	log.Fatal(httpxtra.ListenAndServe(server))
 }
 
