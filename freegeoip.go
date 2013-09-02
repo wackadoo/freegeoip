@@ -242,9 +242,11 @@ func HasQuotaLocal(rc *redis.Client, ipkey *string) (bool, error) {
 }
 
 func CacheMonitor() {
-	log.Println("Quota cache size: ", quota_cache.ItemCount())
-	log.Println("GeoIP cache size: ", geoip_cache.ItemCount())
-	time.Sleep(60 * time.Second)
+	for {
+		log.Println("Quota cache size: ", quota_cache.ItemCount())
+		log.Println("GeoIP cache size: ", geoip_cache.ItemCount())
+		time.Sleep(60 * time.Second)
+	}
 }
 
 const query = `SELECT
