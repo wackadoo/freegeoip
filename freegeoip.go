@@ -41,9 +41,11 @@ type Settings struct {
 	}
 }
 
-var conf *Settings
-var geoip_cache *cache.Cache
-var quota_cache *cache.Cache
+var (
+	conf        *Settings
+	geoip_cache *cache.Cache
+	quota_cache *cache.Cache
+)
 
 func main() {
 	cf := flag.String("config", "freegeoip.conf", "set config file")
@@ -56,12 +58,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	// How long in cache, how often we clean. observe Go's GC to tune it.
+	// Local cache: default expiration and how often to clean.
 	geoip_cache = cache.New(10*time.Minute, 120*time.Second)
 	quota_cache = cache.New(
-		time.Duration(conf.Limit.Expire)*time.Second, 10*time.Second)
+		time.Duration(conf.Limit.Expire)*time.Second,
+		10*time.Second,
+	)
 	if conf.Debug {
-		go CacheMonitor()
+		go monitor()
 	}
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
 	h := GeoipHandler()
@@ -70,7 +74,7 @@ func main() {
 	http.HandleFunc("/json/", h)
 	handler := httpxtra.Handler{XHeaders: conf.XHeaders}
 	if conf.Log {
-		handler.Logger = Logger
+		handler.Logger = logger
 	}
 	server := http.Server{
 		Addr:         conf.Addr,
@@ -85,15 +89,20 @@ func main() {
 	log.Fatal(httpxtra.ListenAndServe(server))
 }
 
-func CacheMonitor() {
+func monitor() {
+	quota_cache.Set("rps", 0, -1)
 	for {
-		time.Sleep(60 * time.Second)
-		log.Println("Quota cache size:", quota_cache.ItemCount())
+		time.Sleep(10 * time.Second)
 		log.Println("GeoIP cache size:", geoip_cache.ItemCount())
+		log.Println("Quota cache size:", quota_cache.ItemCount()-1)
+		rps, _ := quota_cache.Get("rps")
+		quota_cache.Set("rps", 0, -1)
+		log.Println("Requests per second:",
+			float32(float32(rps.(int))/10.0))
 	}
 }
 
-func Logger(r *http.Request, created time.Time, status, bytes int) {
+func logger(r *http.Request, created time.Time, status, bytes int) {
 	//fmt.Println(httpxtra.ApacheCommonLog(r, created, status, bytes))
 	log.Printf("HTTP %d %s %s (%s) :: %s",
 		status,
@@ -119,6 +128,9 @@ func GeoipHandler() http.HandlerFunc {
 	}
 	//defer stmt.Close()
 	return func(w http.ResponseWriter, r *http.Request) {
+		if conf.Debug {
+			quota_cache.Increment("rps", 1)
+		}
 		switch r.Method {
 		case "GET":
 			w.Header().Set("Access-Control-Allow-Origin", "*")
