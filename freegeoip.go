@@ -70,7 +70,7 @@ func main() {
 	http.HandleFunc("/json/", h)
 	handler := httpxtra.Handler{XHeaders: conf.XHeaders}
 	if conf.Log {
-		handler.Logger = logger
+		handler.Logger = Logger
 	}
 	server := http.Server{
 		Addr:         conf.Addr,
@@ -91,7 +91,7 @@ func CacheMonitor() {
 	}
 }
 
-func logger(r *http.Request, created time.Time, status, bytes int) {
+func Logger(r *http.Request, created time.Time, status, bytes int) {
 	//fmt.Println(httpxtra.ApacheCommonLog(r, created, status, bytes))
 	log.Printf("HTTP %d %s %s (%s) :: %s",
 		status,
@@ -217,7 +217,7 @@ func HasQuota(ipkey *string) bool {
 			return false
 		}
 	} else {
-		quota_cache.Set(*ipkey, 1, 0)
+		quota_cache.Set(*ipkey, 1, 0) // Default expiration
 	}
 	return true
 }
