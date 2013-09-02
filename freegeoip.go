@@ -235,7 +235,7 @@ func HasQuotaLocal(rc *redis.Client, ipkey *string) (bool, error) {
 			return false, nil
 		}
 	} else {
-		quota_cache.Set(*ipkey, 0, time.Duration(conf.Limit.Expire)*time.Second)
+		quota_cache.Set(*ipkey, 1, time.Duration(conf.Limit.Expire)*time.Second)
 	}
 
 	return true, nil
