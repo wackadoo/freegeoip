@@ -52,6 +52,7 @@ type Settings struct {
 }
 
 var conf *Settings
+var metrics *MetricRegistry
 
 func main() {
 	cf := flag.String("config", "freegeoip.conf", "set config file")
@@ -65,8 +66,13 @@ func main() {
 		}
 	}
 	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	metrics = NewMetricRegistry("freegeoip")
+
 	log.Printf("FreeGeoIP server starting. debug=%t", conf.Debug)
 	http.Handle("/", http.FileServer(http.Dir(conf.DocumentRoot)))
+	http.HandleFunc("/api/v1/stats", StatsHandler)
+
 	h := GeoipHandler()
 	http.HandleFunc("/csv/", h)
 	http.HandleFunc("/xml/", h)
@@ -124,13 +130,25 @@ func logger(r *http.Request, created time.Time, status, bytes int) {
 	if ip, _, err = net.SplitHostPort(r.RemoteAddr); err != nil {
 		ip = r.RemoteAddr
 	}
+
+	t := time.Since(created)
+
 	log.Printf("%s %d %s %s (%s) :: %s",
 		s,
 		status,
 		r.Method,
 		r.URL.Path,
 		ip,
-		time.Since(created))
+		t)
+
+	// log requests over 0.5ms service time
+	if t >= (1*time.Millisecond)/2 {
+		metrics.Incr("slow_requests")
+	}
+}
+
+func StatsHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, metrics.String())
 }
 
 // GeoipHandler handles GET on /csv, /xml and /json.
@@ -159,6 +177,8 @@ func GeoipHandler() http.HandlerFunc {
 		log.Printf("Using redis to manage quota: %s", conf.Redis)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		metrics.Incr("total_requests")
+
 		switch r.Method {
 		case "GET":
 			w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -200,10 +220,12 @@ func GeoipHandler() http.HandlerFunc {
 				if conf.Debug {
 					log.Println(err) // redis error
 				}
+				metrics.Incr("error_5xx_requests")
 				http.Error(w, http.StatusText(503), 503)
 				return
 			} else if !ok {
 				// Over quota, soz :(
+				metrics.Incr("over_quota_requests")
 				http.Error(w, http.StatusText(403), 403)
 				return
 			}
@@ -218,10 +240,12 @@ func GeoipHandler() http.HandlerFunc {
 			addrs, err := net.LookupHost(a[2])
 			if err != nil {
 				// DNS lookup failed, assume host not found.
+				metrics.Incr("host_not_found")
 				http.Error(w, http.StatusText(404), 404)
 				return
 			}
 			if queryIP = net.ParseIP(addrs[0]); queryIP == nil {
+				metrics.Incr("parse_ip_error")
 				http.Error(w, http.StatusText(400), 400)
 				return
 			}
@@ -230,6 +254,7 @@ func GeoipHandler() http.HandlerFunc {
 				if conf.Debug {
 					log.Println(err)
 				}
+				metrics.Incr("ip2int_error")
 				http.Error(w, http.StatusText(400), 400)
 				return
 			}
@@ -240,6 +265,7 @@ func GeoipHandler() http.HandlerFunc {
 		// Query the db.
 		geoip, err := lookup(stmt, queryIP, nqueryIP)
 		if err != nil {
+			metrics.Incr("ip_not_found")
 			http.NotFound(w, r)
 			return
 		}
@@ -260,6 +286,7 @@ func GeoipHandler() http.HandlerFunc {
 				if conf.Debug {
 					log.Println("JSON error:", err.Error())
 				}
+				metrics.Incr("ip_not_found")
 				http.NotFound(w, r)
 				return
 			}
