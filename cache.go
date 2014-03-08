@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"log"
 	"net"
+	"sort"
 
 	_ "github.com/mattn/go-sqlite3"
 	//_ "code.google.com/p/gosqlite/sqlite3"
@@ -17,18 +18,13 @@ import (
 type Cache struct {
 	Country      map[string]string
 	Region       map[RegionKey]string
-	CityBlock    map[uint32]Block
 	CityLocation map[uint32]Location
+	CityBlock    BlockList
 }
 
 type RegionKey struct {
 	CountryCode,
 	RegionCode string
-}
-
-type Block struct {
-	LocId,
-	IpEnd uint32
 }
 
 type Location struct {
@@ -40,6 +36,26 @@ type Location struct {
 	Longitude float32
 	MetroCode,
 	AreaCode string
+}
+
+type Block struct {
+	IpStart,
+	IpEnd,
+	LocId uint32
+}
+
+type BlockList []Block
+
+func (p BlockList) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
+
+func (p BlockList) Len() int {
+	return len(p)
+}
+
+func (p BlockList) Less(i, j int) bool {
+	return p[i].IpStart < p[j].IpStart
 }
 
 func NewCache(conf *ConfigFile) *Cache {
@@ -56,7 +72,6 @@ func NewCache(conf *ConfigFile) *Cache {
 	cache := &Cache{
 		Country:      make(map[string]string),
 		Region:       make(map[RegionKey]string),
-		CityBlock:    make(map[uint32]Block),
 		CityLocation: make(map[uint32]Location),
 	}
 
@@ -113,24 +128,6 @@ func NewCache(conf *ConfigFile) *Cache {
 
 	row.Close()
 
-	// Load list of city blocks.
-	if row, err = db.Query("SELECT * from city_blocks"); err != nil {
-		log.Fatal("Failed to load city blocks from db:", err)
-	}
-
-	var (
-		ipStart uint32
-		block   Block
-	)
-
-	for row.Next() {
-		if err = row.Scan(&ipStart, &block.IpEnd, &block.LocId); err != nil {
-			log.Fatal("Failed to load city block from db:", err)
-		}
-
-		cache.CityBlock[ipStart] = block
-	}
-
 	// Load list of city locations.
 	if row, err = db.Query("SELECT * FROM city_location"); err != nil {
 		log.Fatal("Failed to load city locations from db:", err)
@@ -161,6 +158,24 @@ func NewCache(conf *ConfigFile) *Cache {
 
 	row.Close()
 
+	// Load list of city blocks.
+	if row, err = db.Query("SELECT * from city_blocks"); err != nil {
+		log.Fatal("Failed to load city blocks from db:", err)
+	}
+
+	var b Block
+	for row.Next() {
+		if err = row.Scan(&b.IpStart, &b.IpEnd, &b.LocId); err != nil {
+			log.Fatal("Failed to load city block from db:", err)
+		}
+
+		cache.CityBlock = append(cache.CityBlock, b)
+	}
+
+	row.Close()
+
+	sort.Sort(cache.CityBlock)
+
 	return cache
 }
 
@@ -180,19 +195,17 @@ func (cache *Cache) Query(IP net.IP, nIP uint32) *GeoIP {
 		return geoip
 	}
 
-	var (
-		block Block
-		ok    bool
-	)
-
-	// TODO: do something proper here
-	for k := nIP; k > 0; k-- {
-		if _, ok = cache.CityBlock[k]; ok {
-			block, _ = cache.CityBlock[k]
-			if nIP <= block.IpEnd {
-				cache.Update(geoip, block.LocId)
-			}
+	var n int
+	for n = 0; n < len(cache.CityBlock); n++ {
+		if cache.CityBlock[n].IpStart > nIP {
 			break
+		}
+	}
+
+	if n > 0 {
+		n--
+		if nIP <= cache.CityBlock[n].IpEnd {
+			cache.Update(geoip, cache.CityBlock[n].LocId)
 		}
 	}
 
