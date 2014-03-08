@@ -185,8 +185,10 @@ func (cache *Cache) Query(IP net.IP, nIP uint32) *GeoIP {
 		ok    bool
 	)
 
+	// TODO: do something proper here
 	for k := nIP; k > 0; k-- {
-		if block, ok = cache.CityBlock[k]; ok {
+		if _, ok = cache.CityBlock[k]; ok {
+			block, _ = cache.CityBlock[k]
 			if nIP <= block.IpEnd {
 				cache.Update(geoip, block.LocId)
 			}
