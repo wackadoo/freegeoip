@@ -7,7 +7,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"encoding/xml"
@@ -27,9 +26,6 @@ import (
 	"time"
 
 	"github.com/fiorix/go-web/httpxtra"
-
-	_ "github.com/mattn/go-sqlite3"
-	//_ "code.google.com/p/gosqlite/sqlite3"
 )
 
 var (
@@ -120,25 +116,8 @@ func main() {
 
 // LookupHandler handles GET on /csv, /xml and /json.
 func LookupHandler() http.HandlerFunc {
-	db, err := sql.Open("sqlite3", conf.IPDB.File)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = db.Exec("PRAGMA cache_size=" + conf.IPDB.CacheSize)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	stmt, err := db.Prepare(ipdb_query)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	log.Println("Caching database, please wait...")
-	cache := NewCache(db)
-
-	//defer stmt.Close()
+	cache := NewCache(conf)
 
 	var quota Quota
 	if len(conf.Redis) == 0 {
@@ -248,11 +227,7 @@ func LookupHandler() http.HandlerFunc {
 		}
 
 		// Query the db.
-		geoip, err := ipdb_lookup(stmt, cache, queryIP, nqueryIP)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
+		geoip := cache.Query(queryIP, nqueryIP)
 
 		w.WriteHeader(200)
 
